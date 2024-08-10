@@ -95,9 +95,14 @@ limitations under the License.
         <div class="select">
           <select id="activations">
             <option value="relu">ReLU</option>
+            <option value="leaky_relu">Leaky ReLU</option>
+            <option value="elu">ELU</option>
+            <option value="swish">Swish</option>
+            <option value="softplus">SoftPlus</option>
             <option value="tanh">Tanh</option>
             <option value="sigmoid">Sigmoid</option>
             <option value="linear">Linear</option>
+            <option value="sine">Sine</option>
           </select>
         </div>
       </div>
@@ -168,6 +173,12 @@ limitations under the License.
           </div>
           <div class="dataset" title="Multi gaussian">
             <canvas class="data-thumbnail" data-regDataset="reg-gauss"></canvas>
+          </div>
+          <div class="dataset" title="Multi Satellite Data-1">
+            <canvas class="data-thumbnail" data-regDataset="sat-data1"></canvas>
+          </div>
+          <div class="dataset" title="Multi Satellite Data-2">
+            <canvas class="data-thumbnail" data-regDataset="sat-data2"></canvas>
           </div>
         </div>
       </div>
