@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+import _ = require('lodash');
+
 /**
  * A node in a neural network. Each node has a state
  * (total input, output, and their respectively derivatives) which changes
@@ -44,6 +46,8 @@ export class Node {
   numAccumulatedDers = 0;
   /** Activation function that takes total input and returns node's output */
   activation: ActivationFunction;
+  /* Used for dropout. */
+  coefficient: number = 1;
 
   /**
    * Creates a new node with the provided id and activation function.
@@ -56,6 +60,10 @@ export class Node {
     }
   }
 
+  dropped(): boolean {
+    return this.coefficient === 0;
+  }
+
   /** Recomputes the node's output and returns it. */
   updateOutput(): number {
     // Stores total input into the node.
@@ -64,7 +72,7 @@ export class Node {
       let link = this.inputLinks[j];
       this.totalInput += link.weight * link.source.output;
     }
-    this.output = this.activation.output(this.totalInput);
+    this.output = this.activation.output(this.totalInput) * this.coefficient;
     return this.output;
   }
 }
@@ -89,12 +97,40 @@ export interface RegularizationFunction {
   der: (weight: number) => number;
 }
 
+function tanh_to_probability(tanh_output: number): number {
+  // Squash output of tanh to within (0, 1).
+  // (An output of exactly 0 or 1 can cause numerical errors.)
+  // See https://brenocon.com/blog/2013/10/tanh-is-a-rescaled-logistic-sigmoid-function/
+  // Why is this necessary?
+  // The Playground visualization code expects an output in the range (-1, 1).
+  // But log loss expects a probability in the range (0, 1).
+  // So we have to support both use cases.
+  // This was the simplest way to do it.
+  return Math.max(
+    Math.min((1 + tanh_output) / 2, 0.99999999999999),
+    0.00000000000001
+  );
+}
+
 /** Built-in error functions */
 export class Errors {
   public static SQUARE: ErrorFunction = {
     error: (output: number, target: number) =>
                0.5 * Math.pow(output - target, 2),
     der: (output: number, target: number) => output - target
+  };
+  public static LOG: ErrorFunction = {
+    error: (output: number, target: number): number => {
+      output = tanh_to_probability(output);
+      target = tanh_to_probability(target);
+      return -1*(target * Math.log(output) + (1-target) * Math.log(1-output));
+    },
+    der: (output: number, target: number): number => {
+      output = tanh_to_probability(output);
+      target = tanh_to_probability(target);
+      // 0.5x log loss derivative due to tanh_to_probability & the chain rule.
+      return (-1*(target/output) + (1-target)/(1-output)) * 0.5;
+    }
   };
 }
 
@@ -123,28 +159,28 @@ export class Activations {
     output: x => Math.max(0, x),
     der: x => x <= 0 ? 0 : 1
   };
-  public static LEAKY_RELU:ActivationFunction  = {
+  public static LEAKY_RELU: ActivationFunction = {
     output: x => x <= 0 ? 0.01 * x : x,
     der: x => x <= 0 ? 0.01 : 1
-  }; 
-  public static ELU:ActivationFunction  = {
+  };
+  public static ELU: ActivationFunction = {
     output: x => x <= 0 ? Math.E ** x - 1 : x,
     der: x => {
-        let output = Activations.ELU.output(x);
-        return x <= 0 ? output + 1 : 1;
-      }
-    }; 
+      let output = Activations.ELU.output(x);
+      return x <= 0 ? output + 1 : 1;
+    }
+  };
   public static SWISH: ActivationFunction = {
     output: x => x / (1 + Math.E ** (-x)),
     der: x => {
       let output = Activations.SWISH.output(x);
       return output + (1 / (1 + Math.E ** (-x))) * (1 - output);
-      }
-    };
+    }
+  };
   public static SOFTPLUS: ActivationFunction = {
     output: x => Math.log(1 + Math.E ** x),
     der: x => 1 / (1 + Math.E ** (-x))
-    };
+  };
   public static SINE: ActivationFunction = {
     output: x => (Math as any).sin(x),
     der: x => (Math as any).cos(x)
@@ -320,7 +356,8 @@ export function backProp(network: Node[][], target: number,
     // 2) each of its input weights.
     for (let i = 0; i < currentLayer.length; i++) {
       let node = currentLayer[i];
-      node.inputDer = node.outputDer * node.activation.der(node.totalInput);
+      node.inputDer = node.outputDer * node.activation.der(node.totalInput) *
+        node.coefficient;
       node.accInputDer += node.inputDer;
       node.numAccumulatedDers++;
     }
@@ -354,37 +391,85 @@ export function backProp(network: Node[][], target: number,
   }
 }
 
+export function createVelocity(network: Node[][]): number[][][] {
+  // Create empty velocity array w/ an entry for every weight in the net.
+  let result: number[][][] = [];
+  result.push(null);  // Dummy value for input layer
+  for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+    result.push([]);
+    let currentLayer: Node[] = network[layerIdx];
+    for (let i = 0; i < currentLayer.length; i++) {
+      let node: Node = currentLayer[i];
+      result[layerIdx].push([]);
+      result[layerIdx][i].push(0);  // Bias
+      for (let j = 0; j < node.inputLinks.length; j++) {
+        result[layerIdx][i].push(0);
+      }
+    }
+  }
+  return result;
+}
+
 /**
  * Updates the weights of the network using the previously accumulated error
  * derivatives.
  */
 export function updateWeights(network: Node[][], learningRate: number,
-    regularizationRate: number) {
-  for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
-    let currentLayer = network[layerIdx];
-    for (let i = 0; i < currentLayer.length; i++) {
-      let node = currentLayer[i];
-      // Update the node's bias.
-      if (node.numAccumulatedDers > 0) {
-        node.bias -= learningRate * node.accInputDer / node.numAccumulatedDers;
-        node.accInputDer = 0;
-        node.numAccumulatedDers = 0;
+    regularizationRate: number, layerwiseGradientNormalization: number,
+    velocity: number[][][], momentum: number) {
+  function updateLayerVelocity(layer: Node[], layerVelocity: number[][]) {
+    for (let i = 0; i < layer.length; i++) {
+      let node = layer[i];
+      if (node.numAccumulatedDers <= 0) {
+        throw new Error("Accumulated derivatives needed for bias weight update");
       }
-      // Update the weights coming into this node.
+      // Update velocity for the node's bias.
+      let partial = node.accInputDer / node.numAccumulatedDers;
+      layerVelocity[i][0] = momentum * layerVelocity[i][0] + (1-momentum) * partial;
+      // Update velocity for the weights coming into this node.
       for (let j = 0; j < node.inputLinks.length; j++) {
         let link = node.inputLinks[j];
         if (link.isDead) {
           continue;
         }
         let regulDer = link.regularization ?
-            link.regularization.der(link.weight) : 0;
-        if (link.numAccumulatedDers > 0) {
+          link.regularization.der(link.weight) : 0;
+        if (link.numAccumulatedDers <= 0) {
+          throw new Error("Accumulated derivatives needed for link weight update");
+        }
+        let partial = link.accErrorDer / link.numAccumulatedDers + regularizationRate * regulDer;
+        layerVelocity[i][j+1] = momentum * layerVelocity[i][j+1] + (1-momentum) * partial;
+      }
+    }
+  }
+  function updateLayerWeights(currentLayer: Node[], layerLearningRate: number,
+      layerVelocity: number[][]) {
+    for (let i = 0; i < currentLayer.length; i++) {
+      let node = currentLayer[i];
+      // Update the node's bias.
+      node.bias -= layerLearningRate * layerVelocity[i][0];
+      node.accInputDer = 0;
+      node.numAccumulatedDers = 0;
+
+      // Update the weights coming into this node.
+      for (let j = 0; j < node.inputLinks.length; j++) {
+        let link = node.inputLinks[j];
+        if (link.isDead) {
+          continue;
+        }
+        if (momentum > 0) {
+          link.weight -= layerLearningRate * layerVelocity[i][j+1];
+          link.accErrorDer = 0;
+          link.numAccumulatedDers = 0;
+        } else {
+          let regulDer = link.regularization ?
+              link.regularization.der(link.weight) : 0;
           // Update the weight based on dE/dw.
           link.weight = link.weight -
-              (learningRate / link.numAccumulatedDers) * link.accErrorDer;
+              (layerLearningRate / link.numAccumulatedDers) * link.accErrorDer;
           // Further update the weight based on regularization.
           let newLinkWeight = link.weight -
-              (learningRate * regularizationRate) * regulDer;
+              (layerLearningRate * regularizationRate) * regulDer;
           if (link.regularization === RegularizationFunction.L1 &&
               link.weight * newLinkWeight < 0) {
             // The weight crossed 0 due to the regularization term. Set it to 0.
@@ -398,6 +483,21 @@ export function updateWeights(network: Node[][], learningRate: number,
         }
       }
     }
+  }
+  for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+    let currentLayer = network[layerIdx];
+    let layerVelocity: number[][] = velocity[layerIdx];
+    updateLayerVelocity(currentLayer, layerVelocity);
+    let layerVelocityNorm: number = _.flatten(layerVelocity)
+      .map(function square(x: number) {
+      return x * x;
+    }).reduce(function sum(x: number, y: number) {
+      return x + y;
+    }) ** (1/2);
+    let layerVelocityDivisor: number = layerVelocityNorm ** layerwiseGradientNormalization;
+    let layerLearningRate: number = layerVelocityNorm === 0 ? 0 :
+      (learningRate / layerVelocityDivisor);
+    updateLayerWeights(currentLayer, layerLearningRate, layerVelocity);
   }
 }
 

@@ -22,14 +22,14 @@ const HIDE_STATE_SUFFIX = "_hide";
 /** A map between names and activation functions. */
 export let activations: {[key: string]: nn.ActivationFunction} = {
   "relu": nn.Activations.RELU,
+  "leaky_relu": nn.Activations.LEAKY_RELU,
+  "elu": nn.Activations.ELU,
+  "swish": nn.Activations.SWISH,
+  "softplus": nn.Activations.SOFTPLUS,
   "tanh": nn.Activations.TANH,
   "sigmoid": nn.Activations.SIGMOID,
   "linear": nn.Activations.LINEAR,
   "sine": nn.Activations.SINE,
-  "leaky_relu" : nn.Activations.LEAKY_RELU,
-  "elu":nn.Activations.ELU,
-  "swish":nn.Activations.SWISH,
-  "softplus":nn.Activations.SOFTPLUS
 };
 
 /** A map between names and regularization functions. */
@@ -45,6 +45,10 @@ export let datasets: {[key: string]: dataset.DataGenerator} = {
   "xor": dataset.classifyXORData,
   "gauss": dataset.classifyTwoGaussData,
   "spiral": dataset.classifySpiralData,
+  "moons": dataset.classifyMoonsData,
+  "heart": dataset.classifyHeartData,
+  "snowflake": dataset.classifySnowflakeData,
+  "infinity": dataset.classifyInfinityData,
 };
 
 /** A map between dataset names and functions that generate regression data. */
@@ -135,7 +139,13 @@ export class State {
     {name: "tutorial", type: Type.STRING},
     {name: "problem", type: Type.OBJECT, keyMap: problems},
     {name: "initZero", type: Type.BOOLEAN},
-    {name: "hideText", type: Type.BOOLEAN}
+    {name: "hideText", type: Type.BOOLEAN},
+    {name: "animationSpeed", type: Type.NUMBER},
+    {name: "layerwiseGradientNormalization", type: Type.NUMBER},
+    {name: "learningRateAutotuning", type: Type.NUMBER},
+    {name: "preventLossIncreases", type: Type.BOOLEAN},
+    {name: "dropout", type: Type.NUMBER},
+    {name: "momentum", type: Type.NUMBER}
   ];
 
   [key: string]: any;
@@ -148,7 +158,7 @@ export class State {
   tutorial: string = null;
   percTrainData = 50;
   activation = nn.Activations.TANH;
-  regularization: nn.RegularizationFunction = null;
+  regularization: nn.RegularizationFunction = nn.RegularizationFunction.L2;
   problem = Problem.CLASSIFICATION;
   initZero = false;
   hideText = false;
@@ -168,6 +178,12 @@ export class State {
   dataset: dataset.DataGenerator = dataset.classifyCircleData;
   regDataset: dataset.DataGenerator = dataset.regressPlane;
   seed: string;
+  animationSpeed: number = 100;
+  layerwiseGradientNormalization: number = 0;
+  learningRateAutotuning: number = -1;
+  preventLossIncreases: boolean = false;
+  dropout: number = 0;
+  momentum: number = 0;
 
   /**
    * Deserializes the state from the url hash.
